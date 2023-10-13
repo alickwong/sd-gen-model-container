@@ -1,0 +1,56 @@
+ARG CUDA_VERSION="11.8.0"
+ARG CUDNN_VERSION="8"
+ARG UBUNTU_VERSION="22.04"
+
+# Base NVidia CUDA Ubuntu image
+FROM nvidia/cuda:$CUDA_VERSION-cudnn$CUDNN_VERSION-devel-ubuntu$UBUNTU_VERSION AS base
+
+EXPOSE 22/tcp
+EXPOSE 8000/tcp
+
+USER root
+# Install Python plus openssh, which is our minimum set of required packages.
+# Install useful command line utility software
+ARG APTPKGS="zsh sudo wget tmux nvtop vim neovim curl rsync less"
+RUN apt-get update -y && \
+    apt-get install -y python3 python3-pip python3-venv && \
+    apt-get install -y --no-install-recommends openssh-server openssh-client git git-lfs && \
+    python3 -m pip install --upgrade pip && \
+    apt-get install -y --no-install-recommends $APTPKGS && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/usr/local/cuda/bin:${PATH}"
+
+ARG USERNAME=vllm
+ENV USERNAME=$USERNAME
+ARG VOLUME=/workspace
+ENV VOLUME=$VOLUME
+
+# Create user, change shell to ZSH, make a volume which they own
+RUN useradd -m -u 1000 $USERNAME && \
+    chsh -s /usr/bin/zsh $USERNAME && \
+    mkdir -p "$VOLUME" && \
+    chown $USERNAME:$USERNAME "$VOLUME" && \
+    usermod -aG sudo $USERNAME && \
+    echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/90-docker-users
+
+USER $USERNAME
+ENV HOME=/home/$USERNAME
+ENV PATH=$HOME/.local/bin:$PATH
+WORKDIR $HOME
+
+ENV TORCH_CUDA_ARCH_LIST="8.0;8.6+PTX;8.9;9.0"
+
+# 你可以考虑添加 pip 清华源或其他国内 pip 源
+RUN git clone https://github.com/vllm-project/vllm.git && \
+    cd vllm && \
+    pip3 install -e . && \
+    pip3 install ray == 2.5.1 && \
+    pip3 install git+https://github.com/huggingface/transformers accelerate==0.21.0 && \
+    pip3 cache purge \
+
+
+EXPOSE 8000
+ENTRYPOINT [ "sh", "-c" ]
+CMD [ "python3 -m vllm.entrypoints.openai.api_server --host 0.0.0.0 --port 8000 --model $MODEL_NAME --download-dir $MODEL_BASE_DIR --max-num-batched-tokens $MAX_NUM_BATCHED_TOKENS --tokenizer $TOKENIZER"]
